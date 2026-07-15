@@ -1,0 +1,17 @@
+--- a/dlls/ntdll/unix/virtual.c	
++++ a/dlls/ntdll/unix/virtual.c	
+@@ -5493,6 +5493,14 @@ static NTSTATUS allocate_virtual_memory( void **ret, SIZE_T *size_ptr, ULONG typ
+ 
+             if (vprot & VPROT_WRITECOPY) status = STATUS_INVALID_PAGE_PROTECTION;
+             else if (is_dos_memory) status = allocate_dos_memory( &view, vprot );
++            else if (is_wow64() && size > 2048 * 1024 * 1024 - 1)
++            {
++                /* Workaround for unarc freezing: its memory probe hits an integer
++                 * overflow in the wow64 thunk but not on a real 32 bit system.
++                 * Hopefully this doesn't break anything' */
++                WARN_(virtual)( "WINE_LIMIT_VIRTUALALLOC: rejecting %zu-byte MEM_RESERVE\n", size );
++                status = STATUS_NO_MEMORY;
++            }
+             else status = map_view( &view, base, size, type, vprot, limit_low, limit_high,
+                                     align ? align - 1 : granularity_mask );
+ 

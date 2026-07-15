@@ -1,0 +1,234 @@
+From: Brandow Lucas <brandowlucas@gmail.com>
+Subject: [PATCH] user32, win32u, comctl32: Fix message and progress rendering
+
+Signed-off-by: Brandow Lucas <brandowlucas@gmail.com>
+---
+
+diff --git a/dlls/comctl32/progress.c b/dlls/comctl32/progress.c
+index 539dacf8fdf..eb66b24fdc2 100644
+--- a/dlls/comctl32/progress.c
++++ b/dlls/comctl32/progress.c
+@@ -267,46 +267,26 @@ static void draw_theme_bar_V (const ProgressDrawInfo* di, int start, int end)
+     DrawThemeBackground (theme, di->hdc, PP_FILLVERT, di->infoPtr->State, &r, NULL);
+ }
+ 
+-/* draw themed horizontal background from 'start' to 'end' */
+-static void draw_theme_bkg_H (const ProgressDrawInfo* di, int start, int end)
++/* The themed background is drawn once before any progress chunks. */
++static void draw_theme_bkg (const ProgressDrawInfo* di, int start, int end)
+ {
+-    HTHEME theme = GetWindowTheme (di->infoPtr->Self);
+-    RECT bgrect, r;
+-
+-    SetRect(&r, di->rect.left + start, di->rect.top, di->rect.left + end, di->rect.bottom);
+-    GetWindowRect(di->infoPtr->Self, &bgrect);
+-    MapWindowPoints(di->infoPtr->Self, 0, (POINT *)&bgrect, 2);
+-    OffsetRect(&bgrect, -bgrect.left, -bgrect.top);
+-
+-    DrawThemeBackground (theme, di->hdc, PP_BAR, 0, &bgrect, &r);
+-}
+-
+-/* draw themed vertical background from 'start' to 'end' */
+-static void draw_theme_bkg_V (const ProgressDrawInfo* di, int start, int end)
+-{
+-    HTHEME theme = GetWindowTheme (di->infoPtr->Self);
+-    RECT bgrect, r;
+-
+-    SetRect(&r, di->rect.left, di->rect.bottom - end, di->rect.right, di->rect.bottom - start);
+-    GetWindowRect(di->infoPtr->Self, &bgrect);
+-    MapWindowPoints(di->infoPtr->Self, 0, (POINT *)&bgrect, 2);
+-    OffsetRect(&bgrect, -bgrect.left, -bgrect.top);
+-
+-    DrawThemeBackground (theme, di->hdc, PP_BARVERT, 0, &bgrect, &r);
++    (void)di;
++    (void)start;
++    (void)end;
+ }
+ 
+ /* drawing functions for themed style */
+ static const ProgressDrawProc drawProcThemed[8] = {
+   /* Smooth */
+     /* Horizontal */
+-    draw_theme_bar_H, draw_theme_bkg_H,
++    draw_theme_bar_H, draw_theme_bkg,
+     /* Vertical */
+-    draw_theme_bar_V, draw_theme_bkg_V,
++    draw_theme_bar_V, draw_theme_bkg,
+   /* Chunky */
+     /* Horizontal */
+-    draw_theme_bar_H, draw_theme_bkg_H,
++    draw_theme_bar_H, draw_theme_bkg,
+     /* Vertical */
+-    draw_theme_bar_V, draw_theme_bkg_V,
++    draw_theme_bar_V, draw_theme_bkg,
+ };
+ #endif /* __WINE_COMCTL32_VERSION == 6 */
+ 
+@@ -322,12 +302,9 @@ static void PROGRESS_DrawBackground (const PROGRESS_INFO *infoPtr, HDC hdc, Prog
+ 
+         GetThemeBackgroundContentRect (theme, hdc, part, 0, &pdi->rect, &content_rect);
+ 
+-        /* Exclude content rect - content background will be drawn later */
+-        ExcludeClipRect (hdc, content_rect.left, content_rect.top, content_rect.right, content_rect.bottom);
+         if (IsThemeBackgroundPartiallyTransparent (theme, part, 0))
+             DrawThemeParentBackground (infoPtr->Self, hdc, NULL);
+         DrawThemeBackground (theme, hdc, part, 0, &pdi->rect, NULL);
+-        SelectClipRgn (hdc, NULL);
+         pdi->rect = content_rect;
+         return;
+     }
+diff --git a/dlls/user32/message.c b/dlls/user32/message.c
+index 42f4a80778c..90c2b52a2ff 100644
+--- a/dlls/user32/message.c
++++ b/dlls/user32/message.c
+@@ -70,6 +70,7 @@ static inline BOOL get_pending_wmchar( MSG *msg, UINT first, UINT last, BOOL rem
+ LRESULT WINAPI MessageWndProc( HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam )
+ {
+     if (message == WM_NCCREATE) return TRUE;
++    if (message == WM_PAINT) return DefWindowProcW( hwnd, message, wParam, lParam );
+     return 0;  /* all other messages are ignored */
+ }
+ 
+diff --git a/dlls/user32/tests/msg.c b/dlls/user32/tests/msg.c
+index feae709ae2a..8bd0bc39834 100644
+--- a/dlls/user32/tests/msg.c
++++ b/dlls/user32/tests/msg.c
+@@ -11369,8 +11369,18 @@ static LRESULT WINAPI HotkeyMsgCheckProcA(HWND hwnd, UINT message, WPARAM wParam
+ 
+ static LRESULT WINAPI WmCopyDataProcA(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+ {
++    static WPARAM expected_erase_hdc;
++
+     switch (msg)
+     {
++        case WM_USER:
++            expected_erase_hdc = wp;
++            return 1;
++        case WM_ERASEBKGND:
++        case WM_ICONERASEBKGND:
++            if (wp != expected_erase_hdc) break;
++            ok(GetObjectType((HGDIOBJ)wp) == 0, "Got valid cross-process HDC %p.\n", (HDC)wp);
++            return msg == WM_ERASEBKGND ? 0x5a17 : 0x5a18;
+         case WM_COPYDATA:
+         {
+             static const DWORD expected_data_sizes[3] = {0, 64, 64 * 1024 * 1024};
+@@ -21269,6 +21279,7 @@ static void test_WM_COPYDATA(char **argv)
+     char cmdline[MAX_PATH];
+     STARTUPINFOA si = {0};
+     COPYDATASTRUCT cds;
++    HDC hdc;
+     HWND hwnd = NULL;
+     BOOL ret;
+ 
+@@ -21284,6 +21295,16 @@ static void test_WM_COPYDATA(char **argv)
+     } while (!hwnd && timeout < 1000);
+     ok(!!hwnd, "Failed to find test window.\n");
+ 
++    hdc = CreateCompatibleDC(NULL);
++    ok(!!hdc, "CreateCompatibleDC failed, error %lu.\n", GetLastError());
++    ret = SendMessageA(hwnd, WM_USER, (WPARAM)hdc, 0);
++    ok(ret == 1, "WM_USER returned %#Ix.\n", (SIZE_T)ret);
++    ret = SendMessageA(hwnd, WM_ERASEBKGND, (WPARAM)hdc, 0);
++    ok(ret == 0x5a17, "WM_ERASEBKGND returned %#Ix.\n", (SIZE_T)ret);
++    ret = SendMessageA(hwnd, WM_ICONERASEBKGND, (WPARAM)hdc, 0);
++    ok(ret == 0x5a18, "WM_ICONERASEBKGND returned %#Ix.\n", (SIZE_T)ret);
++    DeleteDC(hdc);
++
+     buffer = malloc(LARGE_DATA_SIZE);
+     ok(!!buffer, "Failed to allocate memory.\n");
+     for (i = 0, ptr = buffer; i < LARGE_DATA_SIZE; i++, ptr++)
+@@ -21422,6 +21443,40 @@ static void test_defwinproc_wm_print(void)
+     DestroyWindow(hwnd);
+ }
+ 
++static void test_message_class_paint(void)
++{
++    HWND parent, message_window;
++    BOOL ret;
++
++    parent = CreateWindowA( "static", "message class parent", WS_POPUP | WS_VISIBLE,
++                            0, 0, 100, 100, NULL, NULL, NULL, NULL );
++    ok( !!parent, "Failed to create parent window, error %lu.\n", GetLastError() );
++    if (!parent) return;
++
++    message_window = CreateWindowA( "Message", "", WS_CHILD | WS_VISIBLE,
++                                    0, 0, 50, 50, parent, NULL, NULL, NULL );
++    ok( !!message_window, "Failed to create Message window, error %lu.\n", GetLastError() );
++    if (!message_window)
++    {
++        DestroyWindow( parent );
++        return;
++    }
++
++    ValidateRect( message_window, NULL );
++    InvalidateRect( message_window, NULL, FALSE );
++    ret = GetUpdateRect( message_window, NULL, FALSE );
++    ok( ret, "Message window should have an update region.\n" );
++
++    ret = UpdateWindow( message_window );
++    ok( ret, "UpdateWindow failed, error %lu.\n", GetLastError() );
++
++    ret = GetUpdateRect( message_window, NULL, FALSE );
++    ok( !ret, "Message window update region was not consumed.\n" );
++
++    DestroyWindow( message_window );
++    DestroyWindow( parent );
++}
++
+ START_TEST(msg)
+ {
+     char **test_argv;
+@@ -21543,6 +21598,7 @@ START_TEST(msg)
+     test_unicode_wm_char();
+     test_defwinproc();
+     test_defwinproc_wm_print();
++    test_message_class_paint();
+     test_desktop_winproc();
+     test_clipboard_viewers();
+     test_keyflags();
+diff --git a/dlls/win32u/message.c b/dlls/win32u/message.c
+index d432eb3c1af..928651ea052 100644
+--- a/dlls/win32u/message.c
++++ b/dlls/win32u/message.c
+@@ -939,6 +939,11 @@ static BOOL unpack_message( HWND hwnd, UINT message, WPARAM *wparam, LPARAM *lpa
+         if (*wparam <= 1) return TRUE;
+         FIXME( "WM_NCPAINT hdc unpacking not supported\n" );
+         return FALSE;
++    case WM_ERASEBKGND:
++    case WM_ICONERASEBKGND:
++        /* Windows forwards the raw HDC value across processes, even though it
++         * is not a valid GDI handle in the receiving process. */
++        return TRUE;
+     case WM_PAINT:
+         if (!*wparam) return TRUE;
+         /* fall through */
+@@ -947,8 +952,6 @@ static BOOL unpack_message( HWND hwnd, UINT message, WPARAM *wparam, LPARAM *lpa
+     case WM_SETFONT:
+     case WM_GETFONT:
+     /* these contain an HDC */
+-    case WM_ERASEBKGND:
+-    case WM_ICONERASEBKGND:
+     case WM_CTLCOLORMSGBOX:
+     case WM_CTLCOLOREDIT:
+     case WM_CTLCOLORLISTBOX:
+@@ -1292,6 +1295,11 @@ static size_t pack_message( HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
+         FIXME( "WM_NCPAINT hdc packing not supported yet\n" );
+         data->count = -1;
+         return 0;
++    case WM_ERASEBKGND:
++    case WM_ICONERASEBKGND:
++        /* Windows forwards the raw HDC value across processes, even though it
++         * is not a valid GDI handle in the receiving process. */
++        return 0;
+     case WM_PAINT:
+         if (!wparam) return 0;
+         /* fall through */
+@@ -1300,8 +1308,6 @@ static size_t pack_message( HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
+     case WM_SETFONT:
+     case WM_GETFONT:
+     /* these contain an HDC */
+-    case WM_ERASEBKGND:
+-    case WM_ICONERASEBKGND:
+     case WM_CTLCOLORMSGBOX:
+     case WM_CTLCOLOREDIT:
+     case WM_CTLCOLORLISTBOX:

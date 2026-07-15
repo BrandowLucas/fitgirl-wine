@@ -1,0 +1,100 @@
+From: Brandow Lucas <brandowlucas@gmail.com>
+Subject: [PATCH] msvcrt: Don't add a UTF-8 BOM to binary ccs streams.
+
+Native Windows does not prepend a UTF-8 BOM when a stream is opened with
+"wb, ccs=UTF-8". Wine did so despite the explicit binary mode.
+
+Only synthesize the BOM for UTF-8 text streams, and add a regression test for
+the binary mode.
+
+Signed-off-by: Brandow Lucas <brandowlucas@gmail.com>
+---
+ dlls/msvcrt/file.c       | 23 +++++++++++++----------
+ dlls/msvcrt/tests/file.c | 33 +++++++++++++++++++++++++++++++++
+ 2 files changed, 46 insertions(+), 10 deletions(-)
+
+diff --git a/dlls/msvcrt/file.c b/dlls/msvcrt/file.c
+index e5850ecf030..56cf4a98ac2 100644
+--- a/dlls/msvcrt/file.c
++++ b/dlls/msvcrt/file.c
+@@ -2518,16 +2518,19 @@ int CDECL _wsopen_dispatch( const wchar_t* path, int oflags, int shflags, int pm
+       {
+           if (oflags & _O_U8TEXT)
+           {
+-              DWORD written = 0, tmp;
+-
+-              while(written!=sizeof(utf8_bom) && WriteFile(hand, (char*)utf8_bom+written,
+-                          sizeof(utf8_bom)-written, &tmp, NULL))
+-                  written += tmp;
+-              if (written != sizeof(utf8_bom)) {
+-                  WARN("error writing BOM\n");
+-                  CloseHandle(hand);
+-                  msvcrt_set_errno(GetLastError());
+-                  return *_errno();
++              if (!(oflags & _O_BINARY))
++              {
++                  DWORD written = 0, tmp;
++
++                  while(written!=sizeof(utf8_bom) && WriteFile(hand, (char*)utf8_bom+written,
++                              sizeof(utf8_bom)-written, &tmp, NULL))
++                      written += tmp;
++                  if (written != sizeof(utf8_bom)) {
++                      WARN("error writing BOM\n");
++                      CloseHandle(hand);
++                      msvcrt_set_errno(GetLastError());
++                      return *_errno();
++                  }
+               }
+           }
+           else
+diff --git a/dlls/msvcrt/tests/file.c b/dlls/msvcrt/tests/file.c
+index 1cd3a5bffde..ea32cf9d041 100644
+--- a/dlls/msvcrt/tests/file.c
++++ b/dlls/msvcrt/tests/file.c
+@@ -1163,6 +1163,38 @@ static void test_fgetwc_unicode(void)
+     unlink(temppath);
+ }
+ 
++static void test_fopen_utf8_bom(void)
++{
++    char temppath[MAX_PATH], tempfile[MAX_PATH];
++    static const char payload[] = { 0, 0, 0x22, 0x74 };
++    char buffer[sizeof(payload) + 1];
++    FILE *file;
++    size_t size;
++
++    GetTempPathA(MAX_PATH, temppath);
++    GetTempFileNameA(temppath, "", 0, tempfile);
++
++    file = fopen(tempfile, "wb, ccs=UTF-8");
++    ok(file != NULL, "can't open tempfile\n");
++    if (file)
++    {
++        size = fwrite(payload, 1, sizeof(payload), file);
++        ok(size == sizeof(payload), "got %Iu\n", size);
++        fclose(file);
++    }
++
++    file = fopen(tempfile, "rb");
++    ok(file != NULL, "can't open tempfile\n");
++    if (file)
++    {
++        size = fread(buffer, 1, sizeof(buffer), file);
++        ok(size == sizeof(payload), "got %Iu\n", size);
++        ok(!memcmp(buffer, payload, sizeof(payload)), "unexpected UTF-8 BOM\n");
++        fclose(file);
++    }
++    unlink(tempfile);
++}
++
+ static void test_fputwc(void)
+ {
+     char temppath[MAX_PATH];
+@@ -3206,6 +3238,7 @@ START_TEST(file)
+     /* \x83 is U+0083 */
+     test_fgetwc_locale("AB\x83\xa9", "C", 0);
+     test_fgetwc_unicode();
++    test_fopen_utf8_bom();
+     test_fputwc();
+     test_freopen();
+     test_ctrlz();

@@ -1,0 +1,70 @@
+From: BrandowLucas <brandowlucas@gmail.com>
+Subject: [PATCH] ntdll: Allow setting file position on pipe handles.
+
+Signed-off-by: BrandowLucas <brandowlucas@gmail.com>
+---
+diff --git a/dlls/ntdll/unix/file.c b/dlls/ntdll/unix/file.c
+index b641e4c..c6e66e3 100644
+--- a/dlls/ntdll/unix/file.c
++++ b/dlls/ntdll/unix/file.c
+@@ -5235,12 +5235,29 @@ NTSTATUS WINAPI NtSetInformationFile( HANDLE handle, IO_STATUS_BLOCK *io,
+             const FILE_POSITION_INFORMATION *info = ptr;
+ 
+             if ((status = server_get_unix_fd( handle, 0, &fd, &needs_close, NULL, NULL )))
++            {
++                FILE_POSITION_INFORMATION pos_info;
++                IO_STATUS_BLOCK pos_io;
++
++                if ((status == STATUS_BAD_DEVICE_TYPE || status == STATUS_PIPE_DISCONNECTED) &&
++                    !NtQueryInformationFile( handle, &pos_io, &pos_info, sizeof(pos_info), FilePositionInformation ))
++                {
++                    io->Information = 0;
++                    return io->Status = STATUS_SUCCESS;
++                }
++
+                 return io->Status = status;
++            }
+ 
+             if (lseek( fd, info->CurrentByteOffset.QuadPart, SEEK_SET ) == (off_t)-1)
++            {
+                 status = errno_to_status( errno );
++                if (errno == ESPIPE || status == STATUS_PIPE_DISCONNECTED)
++                    status = STATUS_SUCCESS;
++            }
+ 
+             if (needs_close) close( fd );
++            if (!status) io->Information = 0;
+         }
+         else status = STATUS_INVALID_PARAMETER_3;
+         break;
+diff --git a/server/named_pipe.c b/server/named_pipe.c
+index 13982d1..5a25cbe 100644
+--- a/server/named_pipe.c
++++ b/server/named_pipe.c
+@@ -909,6 +909,26 @@ static void pipe_end_get_file_info( struct fd *fd, obj_handle_t handle, unsigned
+             std_info->Directory               = 0;
+             break;
+         }
++    case FilePositionInformation:
++        {
++            FILE_POSITION_INFORMATION *pos_info;
++
++            if (!(get_handle_access( current->process, handle) & FILE_READ_ATTRIBUTES))
++            {
++                set_error( STATUS_ACCESS_DENIED );
++                return;
++            }
++
++            if (get_reply_max_size() < sizeof(*pos_info))
++            {
++                set_error( STATUS_INFO_LENGTH_MISMATCH );
++                return;
++            }
++
++            if (!(pos_info = set_reply_data_size( sizeof(*pos_info) ))) return;
++            pos_info->CurrentByteOffset.QuadPart = 0;
++            break;
++        }
+     default:
+         default_fd_get_file_info( fd, handle, info_class );
+     }
