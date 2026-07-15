@@ -1,5 +1,10 @@
---- a/dlls/ntdll/unix/virtual.c	
-+++ a/dlls/ntdll/unix/virtual.c	
+Based on the workaround by Federico Dossena for WineHQ bug 50824.
+
+Bug: https://bugs.winehq.org/show_bug.cgi?id=50824
+Original patch: https://bugs.winehq.org/attachment.cgi?id=81058
+
+--- a/dlls/ntdll/unix/virtual.c
++++ b/dlls/ntdll/unix/virtual.c
 @@ -5493,6 +5493,14 @@ static NTSTATUS allocate_virtual_memory( void **ret, SIZE_T *size_ptr, ULONG typ
  
              if (vprot & VPROT_WRITECOPY) status = STATUS_INVALID_PAGE_PROTECTION;
