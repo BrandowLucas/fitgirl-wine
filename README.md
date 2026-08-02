@@ -13,9 +13,16 @@ https://github.com/BrandowLucas/fitgirl-wine/releases
 ```sh
 WINEPREFIX=~/.winefitgirl /path/to/wine-11.14-fitgirl-amd64/bin/wine repack_setup.exe
 ```
+
 ## Issues
 
-If you run into a repack that won't work with this patched wine binary, open an issue in https://github.com/BrandowLucas/fitgirl-wine/issues.
+If you run into a repack that won't work with this patched Wine binary, open an issue at https://github.com/BrandowLucas/fitgirl-wine/issues, as long as:
+
+- You confirmed the issue occurs with the `fitgirl-wine` binary provided by this repository.
+- You checked the downloaded repack `.md5` file using MD5/QuickSFV.exe and made sure all files returned OK.
+- You tried installing into `C:` first instead of an external drive such as `Z:` or `D:` etc.
+- You checked the 2 GB or 4 GB RAM limit checkbox in the installer.
+- You retried with optional components disabled, including DirectX, Visual C++ redistributables, additional voice or language packs, DLC, and bonus content.
 
 ## Upstream status
 
