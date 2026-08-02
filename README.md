@@ -11,7 +11,7 @@ https://github.com/BrandowLucas/fitgirl-wine/releases
 ## Run
 
 ```sh
-WINEPREFIX=~/.winefitgirl /path/to/download/wine-11.13-patched-amd64/bin/wine repack.exe
+WINEPREFIX=~/.winefitgirl /path/to/wine-11.14-fitgirl-amd64/bin/wine repack_setup.exe
 ```
 ## Issues
 

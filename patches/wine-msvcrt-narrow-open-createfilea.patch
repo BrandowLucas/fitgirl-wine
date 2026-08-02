@@ -1,0 +1,165 @@
+From: Brandow Lucas <brandowlucas@gmail.com>
+Subject: [PATCH] msvcrt: Keep narrow fopen paths on CreateFileA
+
+Signed-off-by: Brandow Lucas <brandowlucas@gmail.com>
+---
+
+diff --git a/dlls/msvcrt/file.c b/dlls/msvcrt/file.c
+index a095a4f8b0a..4ee29dc453f 100644
+--- a/dlls/msvcrt/file.c
++++ b/dlls/msvcrt/file.c
+@@ -2393,11 +2393,8 @@ static int check_bom(HANDLE h, int oflags, BOOL seek)
+     return oflags;
+ }
+ 
+-/*********************************************************************
+- *              _wsopen_dispatch (UCRTBASE.@)
+- */
+-int CDECL _wsopen_dispatch( const wchar_t* path, int oflags, int shflags, int pmode,
+-    int *fd, int secure )
++static int sopen_dispatch( const wchar_t *pathW, const char *pathA, int oflags,
++    int shflags, int pmode, int *fd, int secure )
+ {
+   DWORD access = 0, creation = 0, attrib;
+   SECURITY_ATTRIBUTES sa;
+@@ -2406,11 +2403,11 @@ int CDECL _wsopen_dispatch( const wchar_t* path, int oflags, int shflags, int pm
+   HANDLE hand;
+ 
+   TRACE("path: (%s) oflags: %#x shflags: %#x pmode: %#x fd*: %p secure: %d\n",
+-        debugstr_w(path), oflags, shflags, pmode, fd, secure);
++        pathW ? debugstr_w(pathW) : debugstr_a(pathA), oflags, shflags, pmode, fd, secure);
+ 
+   if (!MSVCRT_CHECK_PMT( fd != NULL )) return EINVAL;
+   *fd = -1;
+-  if (!MSVCRT_CHECK_PMT(path != NULL)) return EINVAL;
++  if (!MSVCRT_CHECK_PMT(pathW != NULL || pathA != NULL)) return EINVAL;
+ 
+   wxflag = split_oflags(oflags);
+   switch (oflags & (_O_RDONLY | _O_WRONLY | _O_RDWR))
+@@ -2489,8 +2486,12 @@ int CDECL _wsopen_dispatch( const wchar_t* path, int oflags, int shflags, int pm
+           && (creation==OPEN_ALWAYS || creation==OPEN_EXISTING)
+           && !(access&GENERIC_READ))
+   {
+-      hand = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ|FILE_SHARE_WRITE,
+-              &sa, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
++      if (pathW)
++          hand = CreateFileW(pathW, GENERIC_READ, FILE_SHARE_READ|FILE_SHARE_WRITE,
++                  &sa, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
++      else
++          hand = CreateFileA(pathA, GENERIC_READ, FILE_SHARE_READ|FILE_SHARE_WRITE,
++                  &sa, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
+       if (hand != INVALID_HANDLE_VALUE)
+       {
+           oflags = check_bom(hand, oflags, FALSE);
+@@ -2498,7 +2499,10 @@ int CDECL _wsopen_dispatch( const wchar_t* path, int oflags, int shflags, int pm
+       }
+   }
+ 
+-  hand = CreateFileW(path, access, sharing, &sa, creation, attrib, 0);
++  if (pathW)
++      hand = CreateFileW(pathW, access, sharing, &sa, creation, attrib, 0);
++  else
++      hand = CreateFileA(pathA, access, sharing, &sa, creation, attrib, 0);
+   if (hand == INVALID_HANDLE_VALUE)  {
+     WARN(":failed-last error (%ld)\n", GetLastError());
+     msvcrt_set_errno(GetLastError());
+@@ -2576,6 +2580,15 @@ int CDECL _wsopen_dispatch( const wchar_t* path, int oflags, int shflags, int pm
+   return 0;
+ }
+ 
++/*********************************************************************
++ *              _wsopen_dispatch (UCRTBASE.@)
++ */
++int CDECL _wsopen_dispatch( const wchar_t* path, int oflags, int shflags, int pmode,
++    int *fd, int secure )
++{
++    return sopen_dispatch(path, NULL, oflags, shflags, pmode, fd, secure);
++}
++
+ 
+ /*********************************************************************
+  *              _wsopen_s (MSVCRT.@)
+@@ -2614,17 +2627,7 @@ int WINAPIV _wsopen( const wchar_t *path, int oflags, int shflags, ... )
+ int CDECL _sopen_dispatch( const char *path, int oflags, int shflags,
+     int pmode, int *fd, int secure)
+ {
+-    wchar_t *pathW = NULL;
+-    int ret;
+-
+-    if (!MSVCRT_CHECK_PMT(fd != NULL))
+-        return EINVAL;
+-    *fd = -1;
+-    if (path && !(pathW = wstrdupa_utf8(path))) return *_errno();
+-
+-    ret = _wsopen_dispatch(pathW, oflags, shflags, pmode, fd, secure);
+-    free(pathW);
+-    return ret;
++    return sopen_dispatch(NULL, path, oflags, shflags, pmode, fd, secure);
+ }
+ 
+ /*********************************************************************
+@@ -4250,22 +4253,23 @@ wint_t CDECL _fputwchar(wint_t wc)
+   return fputwc(wc, stdout);
+ }
+ 
+-/*********************************************************************
+- *		_wfsopen (MSVCRT.@)
+- */
+-FILE * CDECL _wfsopen(const wchar_t *path, const wchar_t *mode, int share)
++static FILE *fsopen_dispatch(const wchar_t *pathW, const char *pathA,
++        const wchar_t *mode, int share)
+ {
+   FILE* file;
+   int open_flags, stream_flags, fd;
+ 
+-  TRACE("(%s,%s)\n", debugstr_w(path), debugstr_w(mode));
++  TRACE("(%s,%s)\n", pathW ? debugstr_w(pathW) : debugstr_a(pathA), debugstr_w(mode));
+ 
+   /* map mode string to open() flags. "man fopen" for possibilities. */
+   if (msvcrt_get_flags(mode, &open_flags, &stream_flags) == -1)
+       return NULL;
+ 
+   LOCK_FILES();
+-  fd = _wsopen(path, open_flags, share, _S_IREAD | _S_IWRITE);
++  if (pathW)
++      fd = _wsopen(pathW, open_flags, share, _S_IREAD | _S_IWRITE);
++  else
++      fd = _sopen(pathA, open_flags, share, _S_IREAD | _S_IWRITE);
+   if (fd < 0)
+     file = NULL;
+   else if ((file = msvcrt_alloc_fp()) && msvcrt_init_fp(file, fd, stream_flags)
+@@ -4284,24 +4288,26 @@ FILE * CDECL _wfsopen(const wchar_t *path, const wchar_t *mode, int share)
+   return file;
+ }
+ 
++/*********************************************************************
++ *		_wfsopen (MSVCRT.@)
++ */
++FILE * CDECL _wfsopen(const wchar_t *path, const wchar_t *mode, int share)
++{
++    return fsopen_dispatch(path, NULL, mode, share);
++}
++
+ /*********************************************************************
+  *		_fsopen (MSVCRT.@)
+  */
+ FILE * CDECL _fsopen(const char *path, const char *mode, int share)
+ {
+-    wchar_t *pathW = NULL, *modeW = NULL;
++    wchar_t *modeW = NULL;
+     FILE *ret;
+ 
+-    if (path && !(pathW = wstrdupa_utf8(path))) return NULL;
+     if (mode && !(modeW = wstrdupa_utf8(mode)))
+-    {
+-        free(pathW);
+         return NULL;
+-    }
+ 
+-    ret = _wfsopen(pathW, modeW, share);
+-
+-    free(pathW);
++    ret = fsopen_dispatch(NULL, path, modeW, share);
+     free(modeW);
+     return ret;
+ }
